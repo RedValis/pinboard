@@ -58,6 +58,7 @@ export default function App() {
         text: "",
         width: 150,
         height: 80,
+        images: [], // Changed to array for multiple images
         color: COLORS[Math.floor(Math.random() * COLORS.length)],
       },
     ]);
@@ -255,9 +256,126 @@ export default function App() {
       );
     });
 
+  // Export board state to JSON file
+  const handleExport = () => {
+    const boardState = {
+      notes,
+      connections,
+      exportDate: new Date().toISOString(),
+      version: "1.0"
+    };
+    
+    const dataStr = JSON.stringify(boardState, null, 2);
+    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+    
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(dataBlob);
+    link.download = `sticky-notes-board-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
+  // Import board state from JSON file
+  const handleImport = (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const boardState = JSON.parse(e.target.result);
+        
+        // Validate the imported data structure
+        if (boardState.notes && Array.isArray(boardState.notes) && 
+            boardState.connections && Array.isArray(boardState.connections)) {
+          setNotes(boardState.notes);
+          setConnections(boardState.connections);
+          
+          // Clear any ongoing operations
+          setConnecting(null);
+          setConnectLine(null);
+          setNearbyNote(null);
+          setHoveredConnection(null);
+          connectingRef.current = null;
+          
+          console.log('Board imported successfully');
+        } else {
+          alert('Invalid board file format. Please select a valid sticky notes board file.');
+        }
+      } catch (error) {
+        console.error('Error importing board:', error);
+        alert('Error reading board file. Please check the file format.');
+      }
+    };
+    reader.readAsText(file);
+    
+    // Reset the file input so the same file can be imported again
+    event.target.value = '';
+  };
+
   return (
     <div>
-      <h2 style={{ textAlign: "center", margin: 10 }}>Sticky Notes Board 📝</h2>
+      <div style={{ 
+        display: "flex", 
+        justifyContent: "space-between", 
+        alignItems: "center", 
+        margin: "10px 20px" 
+      }}>
+        <div style={{ flex: 1 }} />
+        <h2 style={{ margin: 0, textAlign: "center" }}>Sticky Notes Board 📝</h2>
+        <div style={{ 
+          flex: 1, 
+          display: "flex", 
+          justifyContent: "flex-end", 
+          gap: "10px" 
+        }}>
+          <input
+            type="file"
+            accept=".json"
+            onChange={handleImport}
+            style={{ display: "none" }}
+            id="import-file-input"
+          />
+          <button
+            onClick={() => document.getElementById('import-file-input').click()}
+            style={{
+              padding: "8px 16px",
+              background: "#007bff",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px"
+            }}
+            title="Import board from file"
+          >
+            📁 Import
+          </button>
+          <button
+            onClick={handleExport}
+            style={{
+              padding: "8px 16px",
+              background: "#28a745",
+              color: "white",
+              border: "none",
+              borderRadius: "4px",
+              cursor: "pointer",
+              fontSize: "14px",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px"
+            }}
+            title="Export board to file"
+          >
+            💾 Export
+          </button>
+        </div>
+      </div>
       <div
         ref={boardRef}
         onClick={handleAddNote}
@@ -330,6 +448,24 @@ export default function App() {
                 notes.map((n) => (n.id === note.id ? { ...n, text: val } : n))
               )
             }
+            onImageAdd={(imageData) =>
+              setNotes((prevNotes) =>
+                prevNotes.map((n) => 
+                  n.id === note.id 
+                    ? { ...n, images: [...(n.images || []), imageData] } 
+                    : n
+                )
+              )
+            }
+            onImageRemove={(imageIndex) =>
+              setNotes((prevNotes) =>
+                prevNotes.map((n) => 
+                  n.id === note.id 
+                    ? { ...n, images: (n.images || []).filter((_, i) => i !== imageIndex) } 
+                    : n
+                )
+              )
+            }
             onStartConnect={handleStartConnect}
             onResize={handleResize}
             setNoteRef={(el) => handleNoteRef(note.id, el)}
@@ -338,7 +474,7 @@ export default function App() {
         ))}
       </div>
       <div style={{ textAlign: "center", marginTop: 15, color: "#888" }}>
-        Click anywhere to add a note; drag by the top bar, connect notes by dragging from the circle and getting close to another note's circle. Hover over connection lines to highlight them, click to delete. Drag the bottom-right corner to resize notes.
+        Click anywhere to add a note; drag by the top bar, connect notes by dragging from the circle and getting close to another note's circle. Hover over connection lines to highlight them, click to delete. Drag the bottom-right corner to resize notes. Click 🟰 to attach images or paste images directly into the text area.
       </div>
     </div>
   );
@@ -353,17 +489,23 @@ function StickyNote({
   onDrag,
   onDelete,
   onTextChange,
+  onImageAdd,
+  onImageRemove,
   onStartConnect,
   setNoteRef,
   isNearby,
   width = 150,
   height = 80,
+  images = [],
   onResize,
 }) {
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
   const divRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const textareaRef = useRef(null);
 
   useEffect(() => {
     if (divRef.current) {
@@ -374,9 +516,76 @@ function StickyNote({
     };
   }, [setNoteRef]);
 
+  // Handle image file selection
+  const handleImageUpload = (file) => {
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const imageData = e.target.result;
+          onImageAdd(imageData);
+          
+          // Auto-resize note to accommodate new image if needed
+          const aspectRatio = img.width / img.height;
+          const maxImageWidth = Math.max(width - 20, 200); // Account for padding
+          const newImageHeight = maxImageWidth / aspectRatio;
+          
+          // Calculate total height needed for all images plus text
+          const totalImagesHeight = (images.length + 1) * (newImageHeight + 6); // +6 for gap
+          const newNoteHeight = Math.max(height, totalImagesHeight + 120); // Add space for text and header
+          const newNoteWidth = Math.max(width, 200); // Minimum width for images
+          
+          onResize(id, newNoteWidth, newNoteHeight);
+          setShowDropdown(false);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Handle paste events for images
+  useEffect(() => {
+    const handlePaste = (e) => {
+      if (!textareaRef.current || document.activeElement !== textareaRef.current) {
+        return;
+      }
+      
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith('image/')) {
+            e.preventDefault();
+            const file = items[i].getAsFile();
+            if (file) {
+              handleImageUpload(file);
+            }
+            break;
+          }
+        }
+      }
+    };
+
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [images]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (showDropdown && divRef.current && !divRef.current.contains(e.target)) {
+        setShowDropdown(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDropdown]);
+
   // Mouse event handlers for dragging
   const onMouseDown = (e) => {
-    if (resizing) return; // Don't start dragging while resizing
+    if (resizing || showDropdown) return; // Don't start dragging while resizing or dropdown is open
     setDragging(true);
     dragOffset.current = {
       x: e.clientX - x,
@@ -405,14 +614,15 @@ function StickyNote({
 
   // Connection drag handlers
   const handleCircleDrag = (e) => {
-    if (resizing) return; // Don't start connecting while resizing
-    onStartConnect({ id, x, y, text, color, width, height }, e.currentTarget, e);
+    if (resizing || showDropdown) return; // Don't start connecting while resizing or dropdown is open
+    onStartConnect({ id, x, y, text, color, width, height, images }, e.currentTarget, e);
     e.stopPropagation();
     e.preventDefault();
   };
 
   // Resize handlers
   const handleResizeStart = (e) => {
+    console.log('Starting resize for note:', id);
     setResizing(true);
     e.stopPropagation();
     e.preventDefault();
@@ -425,17 +635,35 @@ function StickyNote({
     const handleResizeMove = (moveEvent) => {
       const newWidth = Math.max(100, startWidth + (moveEvent.clientX - startX));
       const newHeight = Math.max(60, startHeight + (moveEvent.clientY - startY));
+      console.log('Resizing to:', newWidth, newHeight);
       onResize(id, newWidth, newHeight);
     };
 
-    const handleResizeEnd = () => {
+    const handleResizeEnd = (endEvent) => {
+      console.log('Ending resize');
       setResizing(false);
+      endEvent.stopPropagation(); // Prevent any propagation on mouseup
+      endEvent.preventDefault();
       window.removeEventListener("mousemove", handleResizeMove);
       window.removeEventListener("mouseup", handleResizeEnd);
     };
 
     window.addEventListener("mousemove", handleResizeMove);
     window.addEventListener("mouseup", handleResizeEnd);
+  };
+
+  // Handle menu button click
+  const handleMenuClick = (e) => {
+    e.stopPropagation();
+    setShowDropdown(!showDropdown);
+  };
+
+  // Handle file input change
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      handleImageUpload(file);
+    }
   };
 
   return (
@@ -471,9 +699,83 @@ function StickyNote({
         }}
         onMouseDown={onMouseDown}
       >
-        <span role="img" aria-label="drag" style={{ cursor: "grab" }}>
+        <button
+          onClick={handleMenuClick}
+          style={{
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            userSelect: "none",
+            fontSize: "16px",
+            padding: "0 2px",
+          }}
+          aria-label="Menu"
+          title="Attach image"
+        >
           🟰
-        </span>
+        </button>
+        
+        {/* Dropdown Menu */}
+        {showDropdown && (
+          <div
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              background: "white",
+              border: "1px solid #ccc",
+              borderRadius: 4,
+              boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+              zIndex: 1000,
+              minWidth: 120,
+              padding: 4,
+            }}
+          >
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                width: "100%",
+                padding: "6px 10px",
+                border: "none",
+                background: "none",
+                textAlign: "left",
+                cursor: "pointer",
+                borderRadius: 2,
+                fontSize: 14,
+              }}
+              onMouseEnter={(e) => e.target.style.background = "#f0f0f0"}
+              onMouseLeave={(e) => e.target.style.background = "none"}
+            >
+              📎 Attach Image
+            </button>
+            {images && images.length > 0 && (
+              <button
+                onClick={() => {
+                  // Remove all images
+                  for (let i = images.length - 1; i >= 0; i--) {
+                    onImageRemove(i);
+                  }
+                  setShowDropdown(false);
+                }}
+                style={{
+                  width: "100%",
+                  padding: "6px 10px",
+                  border: "none",
+                  background: "none",
+                  textAlign: "left",
+                  cursor: "pointer",
+                  borderRadius: 2,
+                  fontSize: 14,
+                  color: "#d63384",
+                }}
+                onMouseEnter={(e) => e.target.style.background = "#f0f0f0"}
+                onMouseLeave={(e) => e.target.style.background = "none"}
+              >
+                🗑️ Remove All Images
+              </button>
+            )}
+          </div>
+        )}
         
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           {/* Connection Circle */}
@@ -511,39 +813,117 @@ function StickyNote({
           </button>
         </div>
       </div>
-      <textarea
-        style={{
-          background: "transparent",
-          border: "none",
-          resize: "none",
-          width: "100%",
-          minHeight: height - 36, // Account for header height
-          fontSize: 15,
-          padding: "6px 10px",
-          outline: "none",
-        }}
-        value={text}
-        onChange={(e) => onTextChange(e.target.value)}
-        placeholder="Type note..."
+      {/* Content Area */}
+      <div style={{ padding: "6px 10px", display: "flex", flexDirection: "column", gap: "6px" }}>
+        {/* Images Display */}
+        {images && images.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            {images.map((imageData, index) => (
+              <div key={index} style={{ position: "relative", textAlign: "center", overflow: "hidden" }}>
+                <img
+                  src={imageData}
+                  alt={`Attached ${index + 1}`}
+                  style={{
+                    width: "100%",
+                    height: "auto",
+                    borderRadius: 4,
+                    objectFit: "contain",
+                    border: "1px solid rgba(0,0,0,0.1)",
+                    maxWidth: width - 20, // Account for padding
+                    display: "block",
+                  }}
+                />
+                {/* Individual image delete button */}
+                <button
+                  onClick={() => onImageRemove(index)}
+                  style={{
+                    position: "absolute",
+                    top: 2,
+                    right: 2,
+                    background: "rgba(255,255,255,0.9)",
+                    border: "none",
+                    borderRadius: "50%",
+                    width: 20,
+                    height: 20,
+                    fontSize: 12,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    color: "#d63384",
+                    boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                  }}
+                  title="Remove this image"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        
+        {/* Text Area */}
+        <textarea
+          ref={textareaRef}
+          style={{
+            background: "transparent",
+            border: "none",
+            resize: "none",
+            width: "100%",
+            minHeight: images && images.length > 0 ? 40 : Math.max(40, height - 50), // Smaller text area when images present
+            fontSize: 15,
+            outline: "none",
+            fontFamily: "inherit",
+            flex: images && images.length > 0 ? "0 0 auto" : "1",
+          }}
+          value={text}
+          onChange={(e) => onTextChange(e.target.value)}
+          placeholder={images && images.length > 0 ? "Add a caption..." : "Type note or paste image..."}
+        />
+      </div>
+      
+      {/* Hidden File Input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={handleFileChange}
       />
       
       {/* Resize handle */}
       <div
+        data-resize-handle="true"
         onMouseDown={handleResizeStart}
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+        }}
         style={{
           position: "absolute",
           bottom: 0,
           right: 0,
-          width: 12,
-          height: 12,
+          width: 16,
+          height: 16,
           cursor: "nw-resize",
-          background: "rgba(0,0,0,0.3)",
+          background: "rgba(0,0,0,0.2)",
           borderTopLeftRadius: 6,
           borderBottomRightRadius: 6,
           userSelect: "none",
+          zIndex: 10,
         }}
         title="Drag to resize"
-      />
+      >
+        <div style={{
+          position: "absolute",
+          bottom: 2,
+          right: 2,
+          width: 0,
+          height: 0,
+          borderLeft: "6px solid transparent",
+          borderBottom: "6px solid rgba(0,0,0,0.4)",
+        }} />
+      </div>
     </div>
   );
 }
