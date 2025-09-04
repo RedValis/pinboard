@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from "react";
 
 // Helper to generate unique IDs for notes and links
@@ -256,126 +257,9 @@ export default function App() {
       );
     });
 
-  // Export board state to JSON file
-  const handleExport = () => {
-    const boardState = {
-      notes,
-      connections,
-      exportDate: new Date().toISOString(),
-      version: "1.0"
-    };
-    
-    const dataStr = JSON.stringify(boardState, null, 2);
-    const dataBlob = new Blob([dataStr], { type: 'application/json' });
-    
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(dataBlob);
-    link.download = `sticky-notes-board-${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(link.href);
-  };
-
-  // Import board state from JSON file
-  const handleImport = (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const boardState = JSON.parse(e.target.result);
-        
-        // Validate the imported data structure
-        if (boardState.notes && Array.isArray(boardState.notes) && 
-            boardState.connections && Array.isArray(boardState.connections)) {
-          setNotes(boardState.notes);
-          setConnections(boardState.connections);
-          
-          // Clear any ongoing operations
-          setConnecting(null);
-          setConnectLine(null);
-          setNearbyNote(null);
-          setHoveredConnection(null);
-          connectingRef.current = null;
-          
-          console.log('Board imported successfully');
-        } else {
-          alert('Invalid board file format. Please select a valid sticky notes board file.');
-        }
-      } catch (error) {
-        console.error('Error importing board:', error);
-        alert('Error reading board file. Please check the file format.');
-      }
-    };
-    reader.readAsText(file);
-    
-    // Reset the file input so the same file can be imported again
-    event.target.value = '';
-  };
-
   return (
     <div>
-      <div style={{ 
-        display: "flex", 
-        justifyContent: "space-between", 
-        alignItems: "center", 
-        margin: "10px 20px" 
-      }}>
-        <div style={{ flex: 1 }} />
-        <h2 style={{ margin: 0, textAlign: "center" }}>Sticky Notes Board 📝</h2>
-        <div style={{ 
-          flex: 1, 
-          display: "flex", 
-          justifyContent: "flex-end", 
-          gap: "10px" 
-        }}>
-          <input
-            type="file"
-            accept=".json"
-            onChange={handleImport}
-            style={{ display: "none" }}
-            id="import-file-input"
-          />
-          <button
-            onClick={() => document.getElementById('import-file-input').click()}
-            style={{
-              padding: "8px 16px",
-              background: "#007bff",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "14px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px"
-            }}
-            title="Import board from file"
-          >
-            📁 Import
-          </button>
-          <button
-            onClick={handleExport}
-            style={{
-              padding: "8px 16px",
-              background: "#28a745",
-              color: "white",
-              border: "none",
-              borderRadius: "4px",
-              cursor: "pointer",
-              fontSize: "14px",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px"
-            }}
-            title="Export board to file"
-          >
-            💾 Export
-          </button>
-        </div>
-      </div>
+      <h2 style={{ textAlign: "center", margin: 10 }}>Sticky Notes Board 📝</h2>
       <div
         ref={boardRef}
         onClick={handleAddNote}
